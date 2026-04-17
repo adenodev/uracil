@@ -1,0 +1,50 @@
+{
+  "name": "aps.sample.echo-service",
+  "version": "0.1.0",
+  "description": "Sample APS-native service package that targets Uracil.",
+  "runtime": {
+    "name": "uracil",
+    "abi": "uracil.service.v1",
+    "mode": "rootless",
+    "hotswap_group": "aps.sample.echo-service",
+    "payload_revision": "demo-001"
+  },
+  "service": {
+    "entry_function": "health",
+    "functions": [
+      {
+        "name": "health",
+        "description": "Report bundle health.",
+        "required_permissions": []
+      },
+      {
+        "name": "inspect-fs",
+        "description": "List the current working directory.",
+        "required_permissions": [
+          "fs.read"
+        ]
+      },
+      {
+        "name": "net-probe",
+        "description": "Open a client-side virtual network session.",
+        "required_permissions": [
+          "net.client"
+        ]
+      },
+      {
+        "name": "clock-now",
+        "description": "Read the virtual clock.",
+        "required_permissions": [
+          "clock.read"
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "requested": [
+      "fs.read",
+      "net.client",
+      "clock.read"
+    ]
+  }
+}

@@ -26,7 +26,10 @@ add_library(uracil_core
     arch/host/platform.c
     app/demo_bundle.c
     kernel/bundle.c
+    kernel/json.c
+    kernel/loader.c
     kernel/permissions.c
+    kernel/process.c
     kernel/runtime.c
 )
 
@@ -48,6 +51,29 @@ target_include_directories(uracil PRIVATE ${CMAKE_SOURCE_DIR}/app)
 target_compile_options(uracil PRIVATE ${URACIL_WARNING_FLAGS})
 
 if(BUILD_TESTING)
+    # Built-in demo bundle smoke tests
     add_test(NAME uracil_describe COMMAND uracil describe)
     add_test(NAME uracil_permissions COMMAND uracil permissions)
+    add_test(NAME uracil_version COMMAND uracil --version)
+    add_test(NAME uracil_help COMMAND uracil --help)
+
+    # JSON parser tests
+    add_executable(test_json tests/test_json.c)
+    target_link_libraries(test_json PRIVATE uracil_core)
+    target_compile_options(test_json PRIVATE ${URACIL_WARNING_FLAGS})
+    add_test(NAME test_json COMMAND test_json)
+
+    # Bundle loader tests
+    add_executable(test_loader tests/test_loader.c)
+    target_link_libraries(test_loader PRIVATE uracil_core)
+    target_compile_options(test_loader PRIVATE ${URACIL_WARNING_FLAGS})
+    add_test(NAME test_loader COMMAND test_loader)
+    set_tests_properties(test_loader PROPERTIES
+        ENVIRONMENT "URACIL_TEST_MANIFEST_DIR=${CMAKE_SOURCE_DIR}/examples")
+
+    # Permission tests
+    add_executable(test_permissions tests/test_permissions.c)
+    target_link_libraries(test_permissions PRIVATE uracil_core)
+    target_compile_options(test_permissions PRIVATE ${URACIL_WARNING_FLAGS})
+    add_test(NAME test_permissions COMMAND test_permissions)
 endif()
