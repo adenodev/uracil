@@ -1,8 +1,8 @@
 # Uracil
 
-Uracil is a hardware-agnostic microkernel runtime scaffold for native APS services.
+Uracil is a hardware-agnostic microkernel runtime scaffold for native services.
 
-This repository is intentionally host-first. It gives you a working runtime contract, permission model, CLI, and service-bundle shape now, without locking the project to a specific ISA or board. The structure mirrors `rmucore_riscv` closely enough that you can grow it into a lower-level RTOS later.
+This repository is intentionally host-first. It gives you a working runtime contract, permission model, CLI, and service-bundle shape now, without locking the project to a specific ISA or board.
 
 ## Current Scope
 
@@ -109,8 +109,7 @@ The intended APS flow is:
 1. APS downloads a service package that targets the `uracil.service.v1` ABI.
 2. APS reads the package manifest and shows enclosed functions plus requested permissions.
 3. APS installs the package as a Uracil service instead of expanding it into a Python venv.
-4. The user grants only the permissions that service should receive.
-5. Later payload revisions can be hot-swapped as long as they stay within the same `hotswap_group` and ABI.
+4. The user grants only the permissions that service should receive.5. Later payload revisions can be hot-swapped as long as they stay within the same `hotswap_group` and ABI.
 
 Until the C runtime grows a real external payload loader, APS can execute service bundles through `tools/host_runtime.py`. That host runner enforces the same manifest, function, and grant model for dynamic packages while the compiled `uracil` demo binary remains the low-level reference scaffold.
 
