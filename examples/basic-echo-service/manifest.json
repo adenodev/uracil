@@ -1,0 +1,32 @@
+{
+  "name": "demo.basic.echo-service",
+  "version": "0.1.0",
+  "description": "Minimal APS Uracil service with health and echo functions.",
+  "runtime": {
+    "name": "uracil",
+    "abi": "uracil.service.v1",
+    "mode": "rootless",
+    "hotswap_group": "demo.basic.echo-service",
+    "payload_revision": "0.1.0"
+  },
+  "service": {
+    "entry_function": "health",
+    "functions": [
+      {
+        "name": "health",
+        "description": "Return service health metadata.",
+        "snippet_path": "functions/health.py",
+        "required_permissions": []
+      },
+      {
+        "name": "echo",
+        "description": "Echo the provided arguments.",
+        "snippet_path": "functions/echo.py",
+        "required_permissions": []
+      }
+    ]
+  },
+  "permissions": {
+    "requested": []
+  }
+}
