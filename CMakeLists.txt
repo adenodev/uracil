@@ -26,6 +26,7 @@ add_library(uracil_core
     arch/host/platform.c
     app/demo_bundle.c
     kernel/bundle.c
+    kernel/campaign.c
     kernel/json.c
     kernel/loader.c
     kernel/permissions.c
@@ -76,4 +77,10 @@ if(BUILD_TESTING)
     target_link_libraries(test_permissions PRIVATE uracil_core)
     target_compile_options(test_permissions PRIVATE ${URACIL_WARNING_FLAGS})
     add_test(NAME test_permissions COMMAND test_permissions)
+
+    # Campaign kernel tests
+    add_executable(test_campaign tests/test_campaign.c)
+    target_link_libraries(test_campaign PRIVATE uracil_core)
+    target_compile_options(test_campaign PRIVATE ${URACIL_WARNING_FLAGS})
+    add_test(NAME test_campaign COMMAND test_campaign)
 endif()

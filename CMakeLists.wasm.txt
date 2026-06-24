@@ -1,0 +1,64 @@
+cmake_minimum_required(VERSION 3.20)
+
+project(uracil_wasm VERSION 0.1.0 LANGUAGES C)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
+# Emscripten toolchain
+set(CMAKE_C_COMPILER emcc)
+set(CMAKE_CXX_COMPILER em++)
+
+# WASM-specific flags
+set(WASM_C_FLAGS
+    -O2
+    -sWASM=1
+    -sEXPORTED_RUNTIME_METHODS='["ccall","cwrap","HEAPU8","HEAP32","stringToUTF8","UTF8ToString"]'
+    -sEXPORTED_FUNCTIONS='["_malloc","_free","_ur_runtime_init","_ur_runtime_cleanup","_ur_loader_load_bundle","_ur_process_execute_function","_ur_permissions_check","_ur_permissions_grant","_ur_permissions_revoke","_ur_campaign_kernel_boot","_ur_campaign_kernel_print","_ur_json_parse","_ur_json_stringify"]'
+    -sMODULARIZE=1
+    -sEXPORT_NAME="UracilModule"
+    -sENVIRONMENT=web
+    -sALLOW_MEMORY_GROWTH=1
+    -sINITIAL_MEMORY=64MB
+    -sMAXIMUM_MEMORY=256MB
+    -sSTACK_SIZE=1MB
+    -sASSERTIONS=0
+    -Wall
+    -Wextra
+)
+
+# Include directories
+include_directories(${CMAKE_SOURCE_DIR}/include)
+
+# Source files for WASM build
+set(URACIL_WASM_SOURCES
+    arch/wasm/platform.c
+    kernel/bundle.c
+    kernel/campaign.c
+    kernel/json.c
+    kernel/loader.c
+    kernel/permissions.c
+    kernel/process.c
+    kernel/runtime.c
+)
+
+# Create the WASM library
+add_library(uracil_wasm STATIC ${URACIL_WASM_SOURCES})
+target_compile_options(uracil_wasm PRIVATE ${WASM_C_FLAGS})
+
+# Create a simple test executable that can be run in Node.js for testing
+add_executable(uracil_wasm_test test_wasm.c)
+target_link_libraries(uracil_wasm_test PRIVATE uracil_wasm)
+target_compile_options(uracil_wasm_test PRIVATE ${WASM_C_FLAGS})
+set_target_properties(uracil_wasm_test PROPERTIES SUFFIX ".js")
+
+# Main WASM module output
+add_custom_target(uracil_wasm_module
+    COMMAND ${CMAKE_C_COMPILER} ${WASM_C_FLAGS}
+        -I${CMAKE_SOURCE_DIR}/include
+        ${URACIL_WASM_SOURCES}
+        -o ${CMAKE_BINARY_DIR}/uracil.js
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building Uracil WASM module"
+)

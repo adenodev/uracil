@@ -30,6 +30,7 @@ TRAILER_LEN = 16  # 8 B payload size + 8 B magic
 TARGETS = {
     "x86_64_elf": {
         "cc": ["gcc", "cc"],
+        "cxx": ["c++", "g++", "clang++"],
         "cflags": ["-O2", "-s", "-Wall"],
         "ldflags_try": ["-static"],  # try static first, fall back to dynamic
         "ext": ".ura",
@@ -37,6 +38,7 @@ TARGETS = {
     },
     "x86_64_win": {
         "cc": ["x86_64-w64-mingw32-gcc"],
+        "cxx": ["x86_64-w64-mingw32-g++"],
         "cflags": ["-O2", "-s", "-Wall"],
         "ldflags_try": ["-static"],
         "ext": ".exe",
@@ -44,10 +46,19 @@ TARGETS = {
     },
     "riscv_elf": {
         "cc": ["riscv64-linux-gnu-gcc"],
+        "cxx": ["riscv64-linux-gnu-g++"],
         "cflags": ["-O2", "-s", "-Wall"],
         "ldflags_try": ["-static"],
         "ext": ".ura",
         "platform_str": "riscv64-elf",
+    },
+    "wasm32": {
+        "cc": ["emcc"],
+        "cxx": ["em++"],
+        "cflags": ["-O2", "-s", "-Wall", "-sWASM=1", "-sEXPORTED_RUNTIME_METHODS=['ccall','cwrap']", "-sEXPORTED_FUNCTIONS=['_malloc','_free']"],
+        "ldflags_try": [],
+        "ext": ".wasm",
+        "platform_str": "wasm32",
     },
 }
 
@@ -58,6 +69,9 @@ TARGET_ALIASES = {
     "risc_v_ELF": "riscv_elf",
     "riscv_ELF":  "riscv_elf",
     "riscv64_elf": "riscv_elf",
+    "wasm": "wasm32",
+    "WASM": "wasm32",
+    "wasm32": "wasm32",
 }
 
 
@@ -83,6 +97,17 @@ def find_compiler(target: str) -> str:
     )
 
 
+def find_cpp_compiler(target: str) -> str:
+    cfg = TARGETS[target]
+    for compiler in cfg["cxx"]:
+        if shutil.which(compiler):
+            return compiler
+    raise RuntimeError(
+        f"No C++ compiler found for target '{target}'. "
+        f"Install one of: {', '.join(cfg['cxx'])}"
+    )
+
+
 def compile_stub(target: str, output: Path) -> None:
     """Compile ura_stub.c for the given target platform."""
     cc = find_compiler(target)
@@ -103,6 +128,28 @@ def compile_stub(target: str, output: Path) -> None:
         raise RuntimeError(f"Compilation failed:\n{r.stderr}")
 
 
+def _runner_virtualization(runner: dict) -> dict:
+    virtualization = runner.get("virtualization") or {}
+    return virtualization if isinstance(virtualization, dict) else {}
+
+
+def _function_language(function: dict) -> str:
+    value = str(function.get("language") or function.get("runtime") or "python").strip().lower()
+    if value in {"cpp", "c++", "cxx", "native"}:
+        return "cpp"
+    return "python"
+
+
+def _security_cauth(manifest: dict) -> dict:
+    security = manifest.get("security") or {}
+    cauth = security.get("cauth") or {}
+    return cauth if isinstance(cauth, dict) else {}
+
+
+def _runner_config_json(runner: dict) -> str:
+    return json.dumps(runner, sort_keys=True, separators=(",", ":"))
+
+
 def build_meta(manifest: dict, target: str) -> str:
     """Convert an APS manifest.json into the .ura.meta line format."""
     cfg = TARGETS[target]
@@ -115,6 +162,8 @@ def build_meta(manifest: dict, target: str) -> str:
     lines.append(f"abi {runtime.get('abi', 'uracil.service.v1')}")
     lines.append(f"mode {runtime.get('mode', 'rootless')}")
     lines.append(f"platform {cfg['platform_str']}")
+    if runtime.get("target_env"):
+        lines.append(f"target-env {runtime['target_env']}")
 
     service = manifest.get("service") or {}
     entry = service.get("entry_function", "")
@@ -125,7 +174,9 @@ def build_meta(manifest: dict, target: str) -> str:
 
     # Function entries
     for fn in functions:
-        lines.append(f"fn {fn['name']} {fn['snippet_path']}")
+        entry_path = fn.get("binary_path") or fn.get("snippet_path") or fn.get("entry_point")
+        lines.append(f"fn {fn['name']} {entry_path}")
+        lines.append(f"fn-language {fn['name']} {_function_language(fn)}")
     # Descriptions
     for fn in functions:
         desc = fn.get("description", "")
@@ -133,7 +184,7 @@ def build_meta(manifest: dict, target: str) -> str:
             lines.append(f"desc {fn['name']} {desc}")
     # Per-function requirements
     for fn in functions:
-        reqs = fn.get("requires") or []
+        reqs = fn.get("required_permissions") or fn.get("requires") or []
         req_str = " ".join(reqs) if reqs else ""
         lines.append(f"req {fn['name']}{(' ' + req_str) if req_str else ''}")
 
@@ -141,6 +192,64 @@ def build_meta(manifest: dict, target: str) -> str:
     perms = (manifest.get("permissions") or {}).get("requested") or []
     if perms:
         lines.append(f"perm {' '.join(perms)}")
+
+    cauth = _security_cauth(manifest)
+    if cauth:
+        lines.append(f"cauth-enabled {'true' if cauth.get('enabled', True) else 'false'}")
+        for field, meta_key in (
+            ("mode", "cauth-mode"),
+            ("base_url", "cauth-base-url"),
+            ("issuer", "cauth-issuer"),
+            ("audience", "cauth-audience"),
+            ("token_env", "cauth-token-env"),
+            ("secret_key_env", "cauth-secret-key-env"),
+            ("encryption_key_env", "cauth-encryption-key-env"),
+        ):
+            value = cauth.get(field)
+            if value:
+                lines.append(f"{meta_key} {value}")
+
+    runner = manifest.get("runner") or {}
+    if runner:
+        kind = runner.get("kind") or runner.get("name") or ""
+        if kind:
+            lines.append(f"runner {kind}")
+
+        protocol = runner.get("protocol") or ""
+        if protocol:
+            lines.append(f"runner-protocol {protocol}")
+
+        bind = runner.get("bind") or ""
+        if bind:
+            lines.append(f"runner-bind {bind}")
+
+        model = runner.get("model") or {}
+        model_format = model.get("format") or runner.get("model_format") or ""
+        if model_format:
+            lines.append(f"runner-model-format {model_format}")
+
+        model_ref = model.get("uri") or model.get("path") or runner.get("model_uri") or ""
+        if model_ref:
+            lines.append(f"runner-model-ref {model_ref}")
+
+        virtualization = _runner_virtualization(runner)
+        target_platform = runner.get("platform") or runner.get("target") or virtualization.get("target") or ""
+        if target_platform:
+            lines.append(f"runner-target {target_platform}")
+
+        accelerator = runner.get("accelerator") or virtualization.get("accelerator") or ""
+        if accelerator:
+            lines.append(f"runner-accelerator {accelerator}")
+
+        source_format = virtualization.get("source_format") or ""
+        if source_format:
+            lines.append(f"runner-source-format {source_format}")
+
+        runtime_format = virtualization.get("runtime_format") or ""
+        if runtime_format:
+            lines.append(f"runner-runtime-format {runtime_format}")
+
+        lines.append(f"runner-config {_runner_config_json(runner)}")
 
     return "\n".join(lines) + "\n"
 
@@ -193,12 +302,85 @@ def load_package(
         manifest = json.loads(mf.read_text())
         files = {}
         for p in package_dir.rglob("*"):
-            if p.is_file():
-                rel = str(p.relative_to(package_dir))
-                files[rel] = p.read_bytes()
+            if not p.is_file():
+                continue
+            rel = str(p.relative_to(package_dir))
+            # Skip build output directories and compiled service binaries.
+            if rel.startswith("dist/") or rel.startswith("build/"):
+                continue
+            if p.suffix == ".ura":
+                continue
+            files[rel] = p.read_bytes()
         return manifest, files
 
     raise ValueError("Either package_dir or aps_archive must be provided")
+
+
+def _write_temp_package(root: Path, files: dict[str, bytes]) -> None:
+    for relative_path, content in files.items():
+        target = root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+
+
+def _compile_native_function(target: str, package_root: Path, function: dict) -> str:
+    function_name = str(function.get("name") or "native")
+    source_rel = str(function.get("snippet_path") or function.get("entry_point") or "").strip()
+    if not source_rel:
+        raise RuntimeError(f"Native function '{function_name}' is missing snippet_path")
+
+    source_path = (package_root / source_rel).resolve()
+    source_path.relative_to(package_root.resolve())
+    if not source_path.exists():
+        raise RuntimeError(f"Native function source not found: {source_rel}")
+
+    output_rel = str(function.get("binary_path") or f"native/{function_name}").strip()
+    output_path = (package_root / output_rel).resolve()
+    output_path.relative_to(package_root.resolve())
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    build = function.get("build") or {}
+    std = str(build.get("standard") or build.get("std") or "c++20")
+    flags = [str(value) for value in (build.get("flags") or ["-O3"])]
+    include_dirs = [str(value) for value in (build.get("include_dirs") or [])]
+    libraries = [str(value) for value in (build.get("libraries") or [])]
+
+    command = [find_cpp_compiler(target), str(source_path), "-o", str(output_path), f"-std={std}", *flags]
+    for include in include_dirs:
+        include_path = Path(include)
+        if not include_path.is_absolute():
+            include_path = (package_root / include).resolve()
+        command.extend(["-I", str(include_path)])
+    command.extend(libraries)
+
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "native compile failed")
+
+    output_path.chmod(0o755)
+    return str(output_path.relative_to(package_root))
+
+
+def _embed_native_functions(manifest: dict, files: dict[str, bytes], target: str) -> tuple[dict, dict[str, bytes]]:
+    manifest_copy = json.loads(json.dumps(manifest))
+    functions = (manifest_copy.get("service") or {}).get("functions") or []
+    if not any(_function_language(function) == "cpp" for function in functions):
+        return manifest_copy, files
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        package_root = Path(tmp_dir)
+        _write_temp_package(package_root, files)
+        updated_files = dict(files)
+
+        for function in functions:
+            if _function_language(function) != "cpp":
+                continue
+            binary_rel = _compile_native_function(target, package_root, function)
+            function["binary_path"] = binary_rel
+            updated_files[binary_rel] = (package_root / binary_rel).read_bytes()
+
+        updated_files["manifest.json"] = json.dumps(manifest_copy, indent=2).encode("utf-8")
+        return manifest_copy, updated_files
 
 
 def build_ura(
@@ -210,6 +392,19 @@ def build_ura(
     """Build a .ura binary from an installed package or .aps archive."""
     target = resolve_target(target)
     manifest, files = load_package(package_dir, aps_archive)
+    manifest, files = _embed_native_functions(manifest, files, target)
+
+    # For torch-neuron runners, embed the CUDA→Neuron shim into the payload so
+    # ura_stub.c can locate it at $tmpdir/neuron_torch_shim.py at runtime.
+    runner_kind = (manifest.get("runner") or {}).get("kind", "")
+    if runner_kind == "torch-neuron":
+        shim_src = Path(__file__).resolve().parent / "neuron_torch_shim.py"
+        if not shim_src.exists():
+            raise FileNotFoundError(
+                f"neuron_torch_shim.py not found at {shim_src}. "
+                "It must live in the same directory as ura_builder.py."
+            )
+        files["neuron_torch_shim.py"] = shim_src.read_bytes()
 
     # Default output name
     if not output:

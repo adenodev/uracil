@@ -47,6 +47,14 @@
   #define PATH_SEP '/'
 #endif
 
+/* ── Portability helpers ─────────────────────────────────────── */
+
+#ifdef _WIN32
+  #define ura_file_exists(p)  (_access((p), 0) == 0)
+#else
+  #define ura_file_exists(p)  (access((p), F_OK) == 0)
+#endif
+
 /* ── Limits & magic ───────────────────────────────────────────── */
 
 #define MAX_PATH_LEN  4096
@@ -63,10 +71,24 @@ static const uint8_t URA_MAGIC[8] = {'U','R','A',0x01,'S','V','C',0x00};
 typedef struct {
     char name[MAX_NAME];
     char snippet[MAX_NAME];
+    char language[32];
     char description[MAX_LINE];
     char requires[MAX_PERMS][64];
     int  num_requires;
 } ura_func_t;
+
+typedef struct {
+    char kind[64];
+    char protocol[32];
+    char bind[MAX_NAME];
+    char model_format[64];
+    char model_ref[MAX_LINE];
+    char target[MAX_NAME];
+    char accelerator[64];
+    char source_format[64];
+    char runtime_format[64];
+    char config_json[MAX_PATH_LEN];
+} ura_runner_t;
 
 typedef struct {
     char       name[MAX_NAME];
@@ -74,11 +96,21 @@ typedef struct {
     char       abi[64];
     char       mode[32];
     char       platform[64];
+    char       target_env[64];
     char       entry[MAX_NAME];
     ura_func_t funcs[MAX_FUNCTIONS];
     int        num_funcs;
     char       perm_req[MAX_PERMS][64];
     int        num_perm_req;
+    int        cauth_enabled;
+    char       cauth_mode[64];
+    char       cauth_base_url[MAX_LINE];
+    char       cauth_issuer[MAX_LINE];
+    char       cauth_audience[128];
+    char       cauth_token_env[64];
+    char       cauth_secret_key_env[64];
+    char       cauth_encryption_key_env[64];
+    ura_runner_t runner;
 } ura_meta_t;
 
 /* ── Globals ──────────────────────────────────────────────────── */
@@ -331,10 +363,13 @@ static int parse_meta(const char *tmpdir, ura_meta_t *meta) {
             safe_copy(meta->mode, val, sizeof(meta->mode));
         } else if (strcmp(key, "platform") == 0) {
             safe_copy(meta->platform, val, sizeof(meta->platform));
+        } else if (strcmp(key, "target-env") == 0) {
+            safe_copy(meta->target_env, val, sizeof(meta->target_env));
         } else if (strcmp(key, "entry") == 0) {
             safe_copy(meta->entry, val, sizeof(meta->entry));
         } else if (strcmp(key, "fn") == 0 && meta->num_funcs < MAX_FUNCTIONS) {
             ura_func_t *fn = &meta->funcs[meta->num_funcs];
+            safe_copy(fn->language, "python", sizeof(fn->language));
             char *sp = strchr(val, ' ');
             if (sp) {
                 *sp = '\0';
@@ -344,6 +379,18 @@ static int parse_meta(const char *tmpdir, ura_meta_t *meta) {
                 safe_copy(fn->name, val, sizeof(fn->name));
             }
             meta->num_funcs++;
+        } else if (strcmp(key, "fn-language") == 0) {
+            char *sp = strchr(val, ' ');
+            char fname[MAX_NAME];
+            const char *language = "python";
+            if (sp) { *sp = '\0'; safe_copy(fname, val, sizeof(fname)); language = sp + 1; }
+            else { safe_copy(fname, val, sizeof(fname)); }
+            for (int i = 0; i < meta->num_funcs; i++) {
+                if (strcmp(meta->funcs[i].name, fname) == 0) {
+                    safe_copy(meta->funcs[i].language, language, sizeof(meta->funcs[i].language));
+                    break;
+                }
+            }
         } else if (strcmp(key, "desc") == 0) {
             char *sp = strchr(val, ' ');
             char fname[MAX_NAME];
@@ -387,10 +434,132 @@ static int parse_meta(const char *tmpdir, ura_meta_t *meta) {
                 meta->num_perm_req++;
                 tok = strtok(NULL, " ");
             }
+        } else if (strcmp(key, "runner") == 0) {
+            safe_copy(meta->runner.kind, val, sizeof(meta->runner.kind));
+        } else if (strcmp(key, "runner-protocol") == 0) {
+            safe_copy(meta->runner.protocol, val, sizeof(meta->runner.protocol));
+        } else if (strcmp(key, "runner-bind") == 0) {
+            safe_copy(meta->runner.bind, val, sizeof(meta->runner.bind));
+        } else if (strcmp(key, "runner-model-format") == 0) {
+            safe_copy(meta->runner.model_format, val, sizeof(meta->runner.model_format));
+        } else if (strcmp(key, "runner-model-ref") == 0) {
+            safe_copy(meta->runner.model_ref, val, sizeof(meta->runner.model_ref));
+        } else if (strcmp(key, "runner-target") == 0) {
+            safe_copy(meta->runner.target, val, sizeof(meta->runner.target));
+        } else if (strcmp(key, "runner-accelerator") == 0) {
+            safe_copy(meta->runner.accelerator, val, sizeof(meta->runner.accelerator));
+        } else if (strcmp(key, "runner-source-format") == 0) {
+            safe_copy(meta->runner.source_format, val, sizeof(meta->runner.source_format));
+        } else if (strcmp(key, "runner-runtime-format") == 0) {
+            safe_copy(meta->runner.runtime_format, val, sizeof(meta->runner.runtime_format));
+        } else if (strcmp(key, "runner-config") == 0) {
+            safe_copy(meta->runner.config_json, val, sizeof(meta->runner.config_json));
+        } else if (strcmp(key, "cauth-enabled") == 0) {
+            meta->cauth_enabled = (strcmp(val, "true") == 0 || strcmp(val, "1") == 0);
+        } else if (strcmp(key, "cauth-mode") == 0) {
+            safe_copy(meta->cauth_mode, val, sizeof(meta->cauth_mode));
+        } else if (strcmp(key, "cauth-base-url") == 0) {
+            safe_copy(meta->cauth_base_url, val, sizeof(meta->cauth_base_url));
+        } else if (strcmp(key, "cauth-issuer") == 0) {
+            safe_copy(meta->cauth_issuer, val, sizeof(meta->cauth_issuer));
+        } else if (strcmp(key, "cauth-audience") == 0) {
+            safe_copy(meta->cauth_audience, val, sizeof(meta->cauth_audience));
+        } else if (strcmp(key, "cauth-token-env") == 0) {
+            safe_copy(meta->cauth_token_env, val, sizeof(meta->cauth_token_env));
+        } else if (strcmp(key, "cauth-secret-key-env") == 0) {
+            safe_copy(meta->cauth_secret_key_env, val, sizeof(meta->cauth_secret_key_env));
+        } else if (strcmp(key, "cauth-encryption-key-env") == 0) {
+            safe_copy(meta->cauth_encryption_key_env, val, sizeof(meta->cauth_encryption_key_env));
         }
     }
     fclose(f);
     return 0;
+}
+
+static void set_child_env(const char *key, const char *value) {
+    if (!key || !value || !value[0]) return;
+#ifdef _WIN32
+    SetEnvironmentVariableA(key, value);
+#else
+    setenv(key, value, 1);
+#endif
+}
+
+static void join_perms(char *buf, size_t len, char values[][64], int count) {
+    size_t off = 0;
+    if (!buf || len == 0) return;
+    buf[0] = '\0';
+    for (int i = 0; i < count; i++) {
+        int written = snprintf(buf + off, len - off, "%s%s", i ? "," : "", values[i]);
+        if (written < 0 || (size_t)written >= len - off) {
+            buf[len - 1] = '\0';
+            return;
+        }
+        off += (size_t)written;
+    }
+}
+
+static void state_dir_path(char *buf, size_t len) {
+#ifdef _WIN32
+    const char *base = getenv("APPDATA");
+    if (!base) { buf[0] = '\0'; return; }
+    snprintf(buf, len, "%s\\ura", base);
+#else
+    const char *base = getenv("HOME");
+    if (!base) { buf[0] = '\0'; return; }
+    snprintf(buf, len, "%s/.uracil", base);
+#endif
+}
+
+static void apply_runtime_env(const char *tmpdir, const ura_meta_t *meta,
+                              const ura_func_t *fn, char grants[][64], int num_grants) {
+    char requested[MAX_LINE];
+    char granted[MAX_LINE];
+    char state_dir[MAX_PATH_LEN];
+
+    join_perms(requested, sizeof(requested), (char (*)[64])meta->perm_req, meta->num_perm_req);
+    join_perms(granted, sizeof(granted), grants, num_grants);
+    state_dir_path(state_dir, sizeof(state_dir));
+
+    set_child_env("URACIL_SERVICE_NAME", meta->name);
+    set_child_env("URACIL_SERVICE_VERSION", meta->version);
+    set_child_env("URACIL_FUNCTION_NAME", fn->name);
+    set_child_env("URACIL_RUNTIME_ABI", meta->abi);
+    set_child_env("URACIL_SERVICE_DIR", tmpdir);
+    set_child_env("URACIL_STATE_DIR", state_dir);
+    set_child_env("URACIL_ROOTLESS", strcmp(meta->mode, "rootless") == 0 ? "true" : "false");
+    set_child_env("URACIL_REQUESTED_PERMISSIONS", requested);
+    set_child_env("URACIL_GRANTED_PERMISSIONS", granted);
+    set_child_env("URACIL_TARGET_ENV", meta->target_env);
+    if (strcmp(meta->target_env, "keryx-ami") == 0)
+        set_child_env("URACIL_KERYX_AMI", "true");
+    set_child_env("URACIL_RUNNER_KIND", meta->runner.kind);
+    set_child_env("URACIL_RUNNER_PROTOCOL", meta->runner.protocol);
+    set_child_env("URACIL_RUNNER_BIND", meta->runner.bind);
+    set_child_env("URACIL_RUNNER_MODEL_FORMAT", meta->runner.model_format);
+    set_child_env("URACIL_RUNNER_MODEL_REF", meta->runner.model_ref);
+    set_child_env("URACIL_RUNNER_TARGET", meta->runner.target);
+    set_child_env("URACIL_RUNNER_ACCELERATOR", meta->runner.accelerator);
+    set_child_env("URACIL_RUNNER_SOURCE_FORMAT", meta->runner.source_format);
+    set_child_env("URACIL_RUNNER_RUNTIME_FORMAT", meta->runner.runtime_format);
+    set_child_env("URACIL_RUNNER_CONFIG_JSON", meta->runner.config_json);
+    set_child_env("URACIL_CAUTH_ENABLED", meta->cauth_enabled ? "true" : "false");
+    set_child_env("URACIL_CAUTH_MODE", meta->cauth_mode);
+    set_child_env("URACIL_CAUTH_BASE_URL", meta->cauth_base_url);
+    set_child_env("URACIL_CAUTH_ISSUER", meta->cauth_issuer);
+    set_child_env("URACIL_CAUTH_AUDIENCE", meta->cauth_audience);
+    set_child_env("URACIL_CAUTH_TOKEN_ENV", meta->cauth_token_env);
+    set_child_env("URACIL_CAUTH_SECRET_KEY_ENV", meta->cauth_secret_key_env);
+    set_child_env("URACIL_CAUTH_ENCRYPTION_KEY_ENV", meta->cauth_encryption_key_env);
+
+    /* CUDA→Neuron translation env vars — emitted only for torch-neuron runners */
+    if (strcmp(meta->runner.kind, "torch-neuron") == 0) {
+        set_child_env("URACIL_CUDA_TRANSLATE", "1");
+        char neuron_cache[MAX_PATH_LEN];
+        snprintf(neuron_cache, sizeof(neuron_cache),
+                 "%s%cneuron_cache%c%s", state_dir, PATH_SEP, PATH_SEP, meta->name);
+        set_child_env("URACIL_NEURON_CACHE_DIR", neuron_cache);
+    }
 }
 
 /* ── Grants management ────────────────────────────────────────── */
@@ -490,6 +659,113 @@ static int find_python(char *buf, size_t len) {
     return -1;
 }
 
+/* ── torch-neuron translation layer execution ────────────────── */
+
+/*
+ * Run a function snippet via neuron_torch_shim.py.
+ *
+ * The shim must be present at $tmpdir/neuron_torch_shim.py — ura_builder.py
+ * automatically embeds it when runner.kind == "torch-neuron".  The stub
+ * invokes Python as:
+ *
+ *   python3 -c "import sys; sys.path.insert(0, '<tmpdir>');
+ *               import neuron_torch_shim; neuron_torch_shim.run_wrapped('<snippet>')"
+ *               [extra args...]
+ *
+ * apply_runtime_env() has already been called, so URACIL_CUDA_TRANSLATE and
+ * URACIL_NEURON_CACHE_DIR are already in the environment.
+ */
+static int run_torch_neuron_function(const char *tmpdir, const ura_meta_t *meta,
+                                     const ura_func_t *fn, int argc, char **argv) {
+    char python[MAX_PATH_LEN];
+    if (find_python(python, sizeof(python)) != 0) {
+        fprintf(stderr, "ura: python3 not found on PATH\n");
+        return 1;
+    }
+
+    /* Locate the shim — embedded at payload root by ura_builder */
+    char shim_path[MAX_PATH_LEN];
+    snprintf(shim_path, sizeof(shim_path),
+             "%s%cneuron_torch_shim.py", tmpdir, PATH_SEP);
+    if (!ura_file_exists(shim_path)) {
+        /* Fallback: tools/ sub-directory (for development installs) */
+        snprintf(shim_path, sizeof(shim_path),
+                 "%s%ctools%cneuron_torch_shim.py", tmpdir, PATH_SEP, PATH_SEP);
+    }
+    if (!ura_file_exists(shim_path)) {
+        fprintf(stderr,
+                "ura: neuron_torch_shim.py not found in payload\n"
+                "     Rebuild the service with ura_builder.py "
+                "(runner.kind = \"torch-neuron\").\n");
+        return 1;
+    }
+
+    /* Snippet path */
+    char snippet[MAX_PATH_LEN];
+    snprintf(snippet, sizeof(snippet), "%s%c%s", tmpdir, PATH_SEP, fn->snippet);
+
+    fprintf(stderr, "routing '%s' through torch-neuron translation layer\n",
+            fn->name);
+
+    /*
+     * Build the -c script.  tmpdir and snippet are filesystem paths — no shell
+     * expansion happens (passed directly as argv), so embedded path separators
+     * are safe.
+     */
+    char script[MAX_PATH_LEN * 3];
+    snprintf(script, sizeof(script),
+             "import sys; sys.path.insert(0, '%s'); "
+             "import neuron_torch_shim; neuron_torch_shim.run_wrapped('%s')",
+             tmpdir, snippet);
+
+#ifdef _WIN32
+    char cmdline[MAX_PATH_LEN * 4];
+    int off = snprintf(cmdline, sizeof(cmdline),
+                       "\"%s\" -c \"%s\"", python, script);
+    for (int i = 0; i < argc && off < (int)sizeof(cmdline) - 256; i++)
+        off += snprintf(cmdline + off, sizeof(cmdline) - off,
+                        " \"%s\"", argv[i]);
+
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    memset(&si, 0, sizeof(si)); si.cb = sizeof(si);
+    memset(&pi, 0, sizeof(pi));
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, tmpdir, &si, &pi)) {
+        fprintf(stderr, "ura: CreateProcess failed (%lu)\n", GetLastError());
+        return 1;
+    }
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    DWORD ec;
+    GetExitCodeProcess(pi.hProcess, &ec);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    return (int)ec;
+#else
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* argv layout: python, -c, script, [extra args...], NULL */
+        int nargs = 3 + argc + 1;
+        char **child_argv = calloc((size_t)nargs, sizeof(char *));
+        if (!child_argv) _exit(127);
+        child_argv[0] = python;
+        child_argv[1] = (char *)"-c";
+        child_argv[2] = script;
+        for (int i = 0; i < argc; i++) child_argv[3 + i] = argv[i];
+        child_argv[3 + argc] = NULL;
+        if (chdir(tmpdir) != 0) perror("chdir");
+        execvp(python, child_argv);
+        perror("exec");
+        _exit(127);
+    } else if (pid < 0) {
+        perror("fork");
+        return 1;
+    }
+    int status;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+#endif
+}
+
 /* ── Function execution ───────────────────────────────────────── */
 
 static int run_function(const char *tmpdir, const ura_meta_t *meta,
@@ -515,9 +791,62 @@ static int run_function(const char *tmpdir, const ura_meta_t *meta,
         return 1;
     }
 
+    apply_runtime_env(tmpdir, meta, fn, grants, num_grants);
+
+    /* Dispatch to hardware-specific translation paths */
+    if (strcmp(meta->runner.kind, "torch-neuron") == 0)
+        return run_torch_neuron_function(tmpdir, meta, fn, argc, argv);
+
     /* Build snippet path */
     char snippet[MAX_PATH_LEN];
     snprintf(snippet, sizeof(snippet), "%s%c%s", tmpdir, PATH_SEP, fn->snippet);
+
+    if (strcmp(fn->language, "cpp") == 0 || strcmp(fn->language, "native") == 0 || strcmp(fn->language, "c++") == 0) {
+        fprintf(stderr, "running '%s' inside Uracil %s runtime [native]\n",
+                fn->name, meta->mode);
+#ifdef _WIN32
+        char cmdline[MAX_PATH_LEN * 2];
+        int off = snprintf(cmdline, sizeof(cmdline), "\"%s\"", snippet);
+        for (int i = 0; i < argc && off < (int)sizeof(cmdline) - 64; i++)
+            off += snprintf(cmdline + off, sizeof(cmdline) - off, " \"%s\"", argv[i]);
+
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        memset(&si, 0, sizeof(si)); si.cb = sizeof(si);
+        memset(&pi, 0, sizeof(pi));
+        if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, tmpdir, &si, &pi)) {
+            fprintf(stderr, "ura: CreateProcess failed (%lu)\n", GetLastError());
+            return 1;
+        }
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD ec;
+        GetExitCodeProcess(pi.hProcess, &ec);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return (int)ec;
+#else
+        chmod(snippet, 0755);
+        pid_t pid = fork();
+        if (pid == 0) {
+            int nargs = 1 + argc + 1;
+            char **child_argv = calloc((size_t)nargs, sizeof(char *));
+            if (!child_argv) _exit(127);
+            child_argv[0] = snippet;
+            for (int i = 0; i < argc; i++) child_argv[i + 1] = argv[i];
+            child_argv[1 + argc] = NULL;
+            if (chdir(tmpdir) != 0) perror("chdir");
+            execv(snippet, child_argv);
+            perror("exec");
+            _exit(127);
+        } else if (pid < 0) {
+            perror("fork");
+            return 1;
+        }
+        int status;
+        waitpid(pid, &status, 0);
+        return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+#endif
+    }
 
     fprintf(stderr, "running '%s' inside Uracil %s runtime\n",
             fn->name, meta->mode);
@@ -577,6 +906,29 @@ static void cmd_describe(const ura_meta_t *meta) {
     printf("  ABI:      %s [%s]\n", meta->abi, meta->mode);
     if (meta->platform[0])
         printf("  Platform: %s\n", meta->platform);
+    if (meta->target_env[0])
+        printf("  Target:   %s\n", meta->target_env);
+    if (meta->cauth_enabled)
+        printf("  CAuth:    enabled [%s]\n", meta->cauth_mode[0] ? meta->cauth_mode : "default");
+    if (meta->runner.kind[0]) {
+        printf("  Runner:   %s\n", meta->runner.kind);
+        if (meta->runner.protocol[0])
+            printf("  Proto:    %s\n", meta->runner.protocol);
+        if (meta->runner.bind[0])
+            printf("  Bind:     %s\n", meta->runner.bind);
+        if (meta->runner.model_format[0])
+            printf("  Format:   %s\n", meta->runner.model_format);
+        if (meta->runner.model_ref[0])
+            printf("  Model:    %s\n", meta->runner.model_ref);
+        if (meta->runner.target[0])
+            printf("  Target:   %s\n", meta->runner.target);
+        if (meta->runner.accelerator[0])
+            printf("  Accel:    %s\n", meta->runner.accelerator);
+        if (meta->runner.source_format[0])
+            printf("  Source:   %s\n", meta->runner.source_format);
+        if (meta->runner.runtime_format[0])
+            printf("  Runtime:  %s\n", meta->runner.runtime_format);
+    }
     printf("\nFunctions:\n");
     for (int i = 0; i < meta->num_funcs; i++) {
         const ura_func_t *fn = &meta->funcs[i];
@@ -585,6 +937,7 @@ static void cmd_describe(const ura_meta_t *meta) {
             printf("  %-20s %s%s\n", fn->name, fn->description, tag);
         else
             printf("  %s%s\n", fn->name, tag);
+        printf("    language: %s\n", fn->language[0] ? fn->language : "python");
         if (fn->num_requires > 0) {
             printf("    requires:");
             for (int j = 0; j < fn->num_requires; j++)

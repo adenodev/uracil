@@ -1,0 +1,43 @@
+{
+  "name": "demo.pytorch.neuron-service",
+  "version": "0.1.0",
+  "description": "Uracil service that runs a PyTorch model on Inferentia2 via the CUDA→Neuron translation layer.",
+  "runtime": {
+    "name": "uracil",
+    "abi": "uracil.service.v1",
+    "mode": "rootless"
+  },
+  "service": {
+    "entry_function": "infer",
+    "functions": [
+      {
+        "name": "health",
+        "description": "Report shim state, detected Neuron devices, and torch_neuronx availability.",
+        "snippet_path": "functions/health.py",
+        "required_permissions": []
+      },
+      {
+        "name": "infer",
+        "description": "Run a small nn.Linear forward pass through the Neuron translation layer.",
+        "snippet_path": "functions/infer.py",
+        "required_permissions": []
+      }
+    ]
+  },
+  "permissions": {
+    "requested": []
+  },
+  "runner": {
+    "kind": "torch-neuron",
+    "protocol": "none",
+    "bind": "",
+    "accelerator": "neuron",
+    "target": "aws-neuron-inf2",
+    "virtualization": {
+      "target": "aws-neuron-inf2",
+      "accelerator": "neuron",
+      "source_format": "pytorch",
+      "runtime_format": "torch-neuronx"
+    }
+  }
+}

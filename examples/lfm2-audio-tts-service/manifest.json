@@ -1,0 +1,58 @@
+{
+  "name": "demo.lfm2.audio-tts-service",
+  "version": "0.1.0",
+  "description": "Uracil APS bundle for LFM2-Audio TTS via the Athena Neuron sidecar.",
+  "runtime": {
+    "name": "uracil",
+    "abi": "uracil.service.v1",
+    "mode": "rootless",
+    "hotswap_group": "demo.lfm2.audio-tts-service",
+    "payload_revision": "0.1.0"
+  },
+  "service": {
+    "entry_function": "health",
+    "functions": [
+      {
+        "name": "health",
+        "description": "Emit runner wiring and current sidecar target.",
+        "snippet_path": "functions/health.py",
+        "required_permissions": []
+      },
+      {
+        "name": "tts",
+        "description": "Convert text to speech via the Athena Neuron sidecar and write the output WAV to disk.",
+        "snippet_path": "functions/tts.py",
+        "required_permissions": ["net.client"]
+      }
+    ]
+  },
+  "permissions": {
+    "requested": ["net.client"]
+  },
+  "runner": {
+    "kind": "gguf-neuron",
+    "protocol": "http",
+    "bind": "127.0.0.1:8091",
+    "model": {
+      "format": "gguf",
+      "uri": "corpus://athena/models/LFM2-Audio-1.5B-Q8_0.gguf"
+    },
+    "platform": "aws-neuron-inf2",
+    "accelerator": "neuron",
+    "virtualization": {
+      "target": "aws-neuron-inf2",
+      "accelerator": "neuron",
+      "source_format": "gguf",
+      "runtime_format": "ubuntu-x64"
+    },
+    "model_id": "lfm2-audio-1.5b",
+    "hf_repo": "LiquidAI/LFM2-Audio-1.5B-GGUF",
+    "quantization": "Q8_0",
+    "platform_hint": "ubuntu-x64",
+    "artifacts": {
+      "mmproj": "corpus://athena/models/mmproj-audioencoder-LFM2-Audio-1.5B-Q8_0.gguf",
+      "audio_decoder": "corpus://athena/models/audiodecoder-LFM2-Audio-1.5B-Q8_0.gguf",
+      "runner_archive": "corpus://athena/models/lfm2-audio-ubuntu-x64.zip"
+    }
+  }
+}

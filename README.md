@@ -27,6 +27,8 @@ Uracil provides a minimal, capability-scoped execution environment for service b
 - **Subprocess executor** — run function snippets as isolated child processes
 - **Built-in JSON parser** — zero-dependency manifest loading
 - **Hot-swap metadata** — versioned payload groups for safe service updates
+- **Runner metadata passthrough** — `.ura` bundles can carry GGUF/API runner metadata for Athena-managed model services
+- **Campaign kernel** — persistent campaign-scoped state, artifact ownership, and cleanup under `~/.uracil/campaigns/`
 - **Host-first** — works on Linux x86_64 now, designed for additional ISAs later
 - **C11, zero external dependencies** — only libc and POSIX
 
@@ -37,6 +39,7 @@ uracil/
 ├── CMakeLists.txt
 ├── include/uracil/
 │   ├── bundle.h          Service bundle descriptor
+│   ├── campaign.h        Campaign-kernel lifecycle API
 │   ├── common.h          Status codes, utility macros
 │   ├── json.h            JSON parser API
 │   ├── loader.h          External bundle loader API
@@ -46,6 +49,7 @@ uracil/
 │   └── runtime.h         Runtime context and operations
 ├── kernel/
 │   ├── bundle.c          Function lookup
+│   ├── campaign.c        Campaign state, artifacts, cleanup
 │   ├── json.c            Recursive-descent JSON parser
 │   ├── loader.c          Manifest → ur_service_bundle
 │   ├── permissions.c     Grant store (load / save / format)
@@ -58,6 +62,7 @@ uracil/
 │   ├── demo_bundle.c     Compiled-in demo service
 │   └── demo_bundle.h
 ├── tests/
+│   ├── test_campaign.c   Campaign kernel tests
 │   ├── test_json.c       JSON parser tests
 │   ├── test_loader.c     Bundle loader tests
 │   └── test_permissions.c Permission model tests
@@ -155,6 +160,29 @@ The `--bundle` flag switches from the compiled demo to an external service. The 
 4. Executes function snippets via `python3 functions/<name>.py`
 5. Sets `URACIL_*` environment variables for the subprocess
 
+### Campaign kernel
+
+Uracil now exposes a persistent campaign-kernel surface for multi-step coordinators and agent harnesses. Each campaign gets its own runtime root under `~/.uracil/campaigns/<campaign-id>/`, including an `artifacts/` directory for owned binaries and payloads that should be cleaned up when the campaign finishes.
+
+```bash
+# Bootstrap a campaign runtime root
+./build/uracil campaign init demo-campaign keryx keryx-ami adeno-cauth
+
+# Attach a generated artifact for later cleanup
+./build/uracil campaign attach-artifact demo-campaign artifacts/writer.ura
+
+# Transition to running
+./build/uracil campaign start demo-campaign
+
+# Complete the campaign and clean registered artifacts
+./build/uracil campaign complete demo-campaign
+
+# Remove the campaign kernel state entirely
+./build/uracil campaign destroy demo-campaign
+```
+
+The public API in `include/uracil/campaign.h` gives other services the same lifecycle primitives directly in C: boot/load/store, phase transitions, artifact registration, artifact cleanup, and full campaign teardown.
+
 ### Version
 
 ```bash
@@ -233,7 +261,20 @@ Every service bundle carries a `manifest.json` at its root:
     "abi": "uracil.service.v1",
     "mode": "rootless",
     "hotswap_group": "aps.sample.echo-service",
-    "payload_revision": "demo-001"
+    "payload_revision": "demo-001",
+    "target_env": "keryx-ami"
+  },
+  "security": {
+    "cauth": {
+      "enabled": true,
+      "mode": "adeno-cauth",
+      "base_url": "https://adeno.ltd/cauth",
+      "issuer": "https://adeno.ltd/cauth",
+      "audience": "keryx",
+      "token_env": "KERYX_TRANSTOKEN",
+      "secret_key_env": "CAUTH_SECRET_KEY",
+      "encryption_key_env": "CAUTH_ENCRYPTION_KEY"
+    }
   },
   "service": {
     "entry_function": "health",
@@ -241,11 +282,18 @@ Every service bundle carries a `manifest.json` at its root:
       {
         "name": "health",
         "description": "Report bundle health.",
+        "snippet_path": "functions/health.py",
         "required_permissions": []
       },
       {
-        "name": "inspect-fs",
-        "description": "List the current working directory.",
+        "name": "inspect-fs-native",
+        "description": "List the current working directory with a native C++ helper.",
+        "snippet_path": "functions/inspect_fs.cpp",
+        "language": "cpp",
+        "build": {
+          "standard": "c++20",
+          "flags": ["-O3"]
+        },
         "required_permissions": ["fs.read"]
       }
     ]
@@ -268,13 +316,18 @@ Every service bundle carries a `manifest.json` at its root:
 | `runtime.mode` | No | Execution mode (`rootless`) |
 | `runtime.hotswap_group` | No | Group ID for safe payload updates |
 | `runtime.payload_revision` | No | Current payload version |
+| `runtime.target_env` | No | Deployment profile such as `keryx-ami` |
+| `security.cauth` | No | CAuth runtime metadata projected as `URACIL_CAUTH_*` |
 | `service.entry_function` | No | Default function to run |
 | `service.functions[]` | No | Array of function descriptors |
+| `service.functions[].language` | No | `python` (default) or `cpp` for native functions |
+| `service.functions[].build` | No | Optional native compile options for host-runtime and builder |
+| `service.functions[].binary_path` | No | Prebuilt native binary path used by compiled `.ura` bundles |
 | `permissions.requested` | No | Union of all permissions the service needs |
 
 ## Subprocess Execution
 
-When running an external bundle, Uracil executes function snippets as child processes:
+When running an external bundle, Uracil executes function payloads as child processes:
 
 ```
 uracil --bundle <dir> run <function> [args...]
@@ -286,7 +339,8 @@ uracil --bundle <dir> run <function> [args...]
            setenv(URACIL_SERVICE_NAME, ...)
            setenv(URACIL_GRANTED_PERMISSIONS, ...)
            setenv(...)
-           exec("python3", "functions/<function>.py", args...)
+       exec("python3", "functions/<function>.py", args...)   # Python
+       exec("compiled/<function>", args...)                    # Native C++
 ```
 
 ### Environment variables
@@ -299,11 +353,14 @@ uracil --bundle <dir> run <function> [args...]
 | `URACIL_RUNTIME_ABI` | ABI version |
 | `URACIL_HOTSWAP_GROUP` | Hot-swap group identifier |
 | `URACIL_PAYLOAD_REVISION` | Current payload revision |
+| `URACIL_TARGET_ENV` | Deployment profile such as `keryx-ami` |
+| `URACIL_KERYX_AMI` | `true` when targeting the Keryx AMI runtime |
 | `URACIL_SERVICE_DIR` | Absolute path to the service directory |
 | `URACIL_STATE_DIR` | Path to `~/.uracil` |
 | `URACIL_ROOTLESS` | Always `true` in rootless mode |
 | `URACIL_REQUESTED_PERMISSIONS` | Comma-separated list |
 | `URACIL_GRANTED_PERMISSIONS` | Comma-separated list |
+| `URACIL_CAUTH_*` | Adeno CAuth runtime contract for token and envelope metadata |
 
 ## APS Integration
 
@@ -339,6 +396,10 @@ Uracil is designed as a runtime target for the [APS](https://aps.adeno.ltd) (Ade
 # 2. Install via APS
 aps install service weather-check-service
 
+# 2b. Audit the package locally without exposing secrets
+aps audit weather-check-service
+aps audit weather-check-service --shell
+
 # 3. Inspect the bundle
 uracil --bundle ~/.aps/packages/weather-check-service describe
 
@@ -348,6 +409,88 @@ uracil --bundle ~/.aps/packages/weather-check-service grant net.client
 # 5. Run a function
 uracil --bundle ~/.aps/packages/weather-check-service run current-weather London
 ```
+
+### GGUF service runners
+
+Athena packages model-backed services as APS bundles first, then compiles them
+into `.ura` binaries. For GGUF-backed services, include runner metadata in the
+manifest so the URA artifact carries the model contract alongside the function
+definitions:
+
+```json
+{
+  "name": "mistral-chat-service",
+  "version": "0.3.0",
+  "runtime": {
+    "name": "uracil",
+    "abi": "uracil.service.v1",
+    "mode": "rootless"
+  },
+  "service": {
+    "entry_function": "chat",
+    "functions": [
+      {
+        "name": "chat",
+        "snippet_path": "functions/chat.py",
+        "required_permissions": ["net.server"]
+      }
+    ]
+  },
+  "permissions": {
+    "requested": ["net.server"]
+  },
+  "runner": {
+    "kind": "gguf-http",
+    "protocol": "http",
+    "bind": "127.0.0.1:8088",
+    "model": {
+      "format": "gguf",
+      "uri": "corpus://athena/models/mistral-7b-instruct.gguf"
+    }
+  }
+}
+```
+
+`tools/ura_builder.py` now preserves this runner metadata into `.ura.meta` via
+`runner`, `runner-protocol`, `runner-bind`, `runner-model-format`,
+`runner-model-ref`, `runner-target`, `runner-accelerator`,
+`runner-source-format`, `runner-runtime-format`, and `runner-config` lines.
+Both Uracil execution paths consume that contract now:
+
+- the APS-installed host runtime exposes the runner block to snippets through
+  `URACIL_RUNNER_*` environment variables
+- compiled `.ura` binaries parse the same metadata and expose the same
+  `URACIL_RUNNER_*` variables inside the virtualized stub process
+
+That is the control surface for GGUF-on-Neuron packaging. A bundle can keep the
+source model in GGUF while declaring the virtualized runtime target separately:
+
+```json
+{
+  "runner": {
+    "kind": "gguf-neuron",
+    "protocol": "http",
+    "bind": "127.0.0.1:8091",
+    "model": {
+      "format": "gguf",
+      "uri": "corpus://athena/models/mistral-7b-instruct.gguf"
+    },
+    "virtualization": {
+      "target": "aws-neuron-inf2",
+      "accelerator": "neuron",
+      "source_format": "gguf",
+      "runtime_format": "neff"
+    }
+  }
+}
+```
+
+Athena can then register the model as `runner=gguf-neuron` while keeping the
+original Corpus reference in GGUF form.
+
+For a concrete audio-oriented bundle, see `uracil/examples/lfm2-audio-neuron-service`,
+which forwards interleaved wav requests to the Athena Neuron sidecar via the
+same `URACIL_RUNNER_*` contract.
 
 ## Architecture
 

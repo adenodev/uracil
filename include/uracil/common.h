@@ -14,7 +14,9 @@ typedef enum ur_status {
     UR_NOT_FOUND = 2,
     UR_PERMISSION_DENIED = 3,
     UR_INVALID_ARGUMENT = 4,
-    UR_IO_ERROR = 5
+    UR_IO_ERROR = 5,
+    UR_OUT_OF_MEMORY = 6,
+    UR_NOT_SUPPORTED = 7
 } ur_status;
 
 #endif

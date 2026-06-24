@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "uracil/campaign.h"
 #include "demo_bundle.h"
 #include "uracil/loader.h"
 #include "uracil/platform.h"
@@ -25,6 +26,15 @@ static void ur_print_usage(FILE *stream, const char *program_name)
         "  %s --bundle <dir> grant <permission> [permission...]\n"
         "  %s --bundle <dir> revoke <permission> [permission...]\n"
         "  %s --bundle <dir> permissions\n"
+        "\ncampaign kernel:\n"
+        "  %s campaign init <campaign-id> <owner-service> [target-env] [security-profile]\n"
+        "  %s campaign status <campaign-id>\n"
+        "  %s campaign start <campaign-id>\n"
+        "  %s campaign fail <campaign-id>\n"
+        "  %s campaign attach-artifact <campaign-id> <path>\n"
+        "  %s campaign cleanup <campaign-id>\n"
+        "  %s campaign complete <campaign-id>\n"
+        "  %s campaign destroy <campaign-id>\n"
         "\nflags:\n"
         "  %s --version\n"
         "  %s --help\n"
@@ -32,13 +42,129 @@ static void ur_print_usage(FILE *stream, const char *program_name)
         "  %s describe\n"
         "  %s grant fs.read clock.read\n"
         "  %s run inspect-fs\n"
+        "  %s campaign init demo-campaign keryx keryx-ami adeno-cauth\n"
+        "  %s campaign attach-artifact demo-campaign artifacts/writer.ura\n"
         "  %s --bundle ~/.aps/packages/weather-check-service run current-weather London\n",
         URACIL_VERSION,
         program_name, program_name, program_name, program_name,
         program_name, program_name, program_name, program_name,
         program_name, program_name, program_name, program_name,
-        program_name, program_name, program_name, program_name
+        program_name, program_name, program_name, program_name,
+        program_name, program_name, program_name, program_name,
+        program_name, program_name, program_name, program_name,
+        program_name, program_name
     );
+}
+
+static int ur_print_campaign_error(const char *action, ur_status status)
+{
+    fprintf(stderr, "%s failed: %s\n", action, ur_status_string(status));
+    return 1;
+}
+
+static int ur_run_campaign_command(int argc, char **argv)
+{
+    const char *command;
+    ur_campaign_kernel campaign;
+    ur_status status;
+    size_t removed = 0U;
+
+    if (argc < 1) {
+        fprintf(stderr, "campaign command required\n");
+        return 1;
+    }
+
+    command = argv[0];
+
+    if (strcmp(command, "init") == 0) {
+        const char *target_env = (argc >= 4) ? argv[3] : "generic";
+        const char *security_profile = (argc >= 5) ? argv[4] : "none";
+
+        if (argc < 3) {
+            fprintf(stderr, "usage: campaign init <campaign-id> <owner-service> [target-env] [security-profile]\n");
+            return 1;
+        }
+
+        status = ur_campaign_kernel_boot(
+            argv[1], argv[2], target_env, UR_CAMPAIGN_KERNEL_ABI, security_profile, &campaign);
+        if (status != UR_OK) {
+            return ur_print_campaign_error("campaign init", status);
+        }
+        return ur_campaign_kernel_print(stdout, &campaign) == UR_OK ? 0 : 1;
+    }
+
+    if (argc < 2) {
+        fprintf(stderr, "usage: campaign %s <campaign-id>\n", command);
+        return 1;
+    }
+
+    status = ur_campaign_kernel_load(argv[1], &campaign);
+    if (status != UR_OK) {
+        return ur_print_campaign_error("campaign load", status);
+    }
+
+    if (strcmp(command, "status") == 0) {
+        return ur_campaign_kernel_print(stdout, &campaign) == UR_OK ? 0 : 1;
+    }
+
+    if (strcmp(command, "start") == 0) {
+        status = ur_campaign_kernel_transition(&campaign, UR_CAMPAIGN_PHASE_RUNNING);
+        if (status != UR_OK) {
+            return ur_print_campaign_error("campaign start", status);
+        }
+        return ur_campaign_kernel_print(stdout, &campaign) == UR_OK ? 0 : 1;
+    }
+
+    if (strcmp(command, "fail") == 0) {
+        status = ur_campaign_kernel_transition(&campaign, UR_CAMPAIGN_PHASE_FAILED);
+        if (status != UR_OK) {
+            return ur_print_campaign_error("campaign fail", status);
+        }
+        return ur_campaign_kernel_print(stdout, &campaign) == UR_OK ? 0 : 1;
+    }
+
+    if (strcmp(command, "attach-artifact") == 0) {
+        if (argc < 3) {
+            fprintf(stderr, "usage: campaign attach-artifact <campaign-id> <path>\n");
+            return 1;
+        }
+        status = ur_campaign_kernel_attach_artifact(&campaign, argv[2]);
+        if (status != UR_OK) {
+            return ur_print_campaign_error("campaign attach-artifact", status);
+        }
+        return ur_campaign_kernel_print(stdout, &campaign) == UR_OK ? 0 : 1;
+    }
+
+    if (strcmp(command, "cleanup") == 0) {
+        status = ur_campaign_kernel_cleanup_artifacts(&campaign, stdout, &removed);
+        if (status != UR_OK) {
+            return ur_print_campaign_error("campaign cleanup", status);
+        }
+        printf("removed artifact entries: %zu\n", removed);
+        return ur_campaign_kernel_print(stdout, &campaign) == UR_OK ? 0 : 1;
+    }
+
+    if (strcmp(command, "complete") == 0) {
+        status = ur_campaign_kernel_complete(&campaign, stdout, &removed);
+        if (status != UR_OK) {
+            return ur_print_campaign_error("campaign complete", status);
+        }
+        printf("removed artifact entries: %zu\n", removed);
+        return ur_campaign_kernel_print(stdout, &campaign) == UR_OK ? 0 : 1;
+    }
+
+    if (strcmp(command, "destroy") == 0) {
+        status = ur_campaign_kernel_destroy(&campaign, true, stdout, &removed);
+        if (status != UR_OK) {
+            return ur_print_campaign_error("campaign destroy", status);
+        }
+        printf("destroyed campaign kernel: %s\n", argv[1]);
+        printf("removed artifact entries: %zu\n", removed);
+        return 0;
+    }
+
+    fprintf(stderr, "unknown campaign command: %s\n", command);
+    return 1;
 }
 
 static int ur_dispatch_permission_update(
@@ -192,6 +318,10 @@ int main(int argc, char **argv)
     if ((strcmp(command, "version") == 0) || (strcmp(command, "--version") == 0)) {
         printf("uracil %s\n", URACIL_VERSION);
         return 0;
+    }
+
+    if (strcmp(command, "campaign") == 0) {
+        return ur_run_campaign_command(argc - 2, argv + 2);
     }
 
     /* External bundle mode */
