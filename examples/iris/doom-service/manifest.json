@@ -1,0 +1,58 @@
+{
+  "name": "ai.adeno.doom-engine",
+  "version": "1.9.0",
+  "description": "doomgeneric \u2014 id Software's Doom (shareware episode; engine GPL-2.0) running as a Uracil service. Renders 320x200 as ANSI truecolor half-blocks; all file I/O, timing and console output are serviced by the microkernel.",
+  "runtime": {
+    "name": "uracil",
+    "abi": "uracil.service.v1",
+    "mode": "rootless",
+    "hotswap_group": "ai.adeno.doom-engine",
+    "payload_revision": "wasm32-1"
+  },
+  "service": {
+    "entry_function": "doom_start",
+    "functions": [
+      {
+        "name": "doom_start",
+        "description": "Initialize the engine against doom1.wad from the service directory.",
+        "required_permissions": [
+          "fs.read"
+        ],
+        "language": "wasm32"
+      },
+      {
+        "name": "doom_tick",
+        "description": "Advance the engine one frame (uses the platform clock).",
+        "required_permissions": [
+          "clock.read"
+        ],
+        "language": "wasm32"
+      },
+      {
+        "name": "doom_key",
+        "description": "Deliver a key event (no platform requirements).",
+        "required_permissions": [],
+        "language": "wasm32"
+      },
+      {
+        "name": "doom_frame",
+        "description": "Return the latest framebuffer as ANSI text.",
+        "required_permissions": [],
+        "language": "wasm32"
+      },
+      {
+        "name": "doom_state",
+        "description": "Report engine state.",
+        "required_permissions": [],
+        "language": "wasm32"
+      }
+    ]
+  },
+  "permissions": {
+    "requested": [
+      "fs.read",
+      "fs.write",
+      "clock.read"
+    ]
+  }
+}

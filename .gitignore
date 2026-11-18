@@ -1,4 +1,6 @@
 build/
+build_wasm/
+__pycache__/
 .cache/
 .vscode/
 compile_commands.json

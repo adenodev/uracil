@@ -137,6 +137,8 @@ def _function_language(function: dict) -> str:
     value = str(function.get("language") or function.get("runtime") or "python").strip().lower()
     if value in {"cpp", "c++", "cxx", "native"}:
         return "cpp"
+    if value in {"wasm32", "wasm", "uracil-wasm"}:
+        return "wasm32"
     return "python"
 
 
@@ -175,7 +177,11 @@ def build_meta(manifest: dict, target: str) -> str:
     # Function entries
     for fn in functions:
         entry_path = fn.get("binary_path") or fn.get("snippet_path") or fn.get("entry_point")
-        lines.append(f"fn {fn['name']} {entry_path}")
+        if entry_path:
+            lines.append(f"fn {fn['name']} {entry_path}")
+        else:
+            # wasm32 service binaries: the module itself is the executable
+            lines.append(f"fn {fn['name']}")
         lines.append(f"fn-language {fn['name']} {_function_language(fn)}")
     # Descriptions
     for fn in functions:
@@ -388,9 +394,17 @@ def build_ura(
     aps_archive: Path | None = None,
     target: str = "x86_64_elf",
     output: Path | None = None,
+    stub_wasm: Path | None = None,
 ) -> Path:
-    """Build a .ura binary from an installed package or .aps archive."""
+    """Build a .ura binary from an installed package or .aps archive.
+
+    stub_wasm: wasm32-only. Use a prebuilt module as the service binary
+    instead of compiling ura_stub.c — the microkernel performs the stub's
+    role for wasm payloads (trailer/meta/payload handling, grants, env).
+    """
     target = resolve_target(target)
+    if stub_wasm is not None and target != "wasm32":
+        raise ValueError("--stub-wasm is only valid with --target wasm32")
     manifest, files = load_package(package_dir, aps_archive)
     manifest, files = _embed_native_functions(manifest, files, target)
 
@@ -410,13 +424,23 @@ def build_ura(
     if not output:
         cfg = TARGETS[target]
         name = manifest["name"].replace(".", "-")
-        output = Path(f"{name}{cfg['ext']}")
+        if stub_wasm is not None:
+            output = Path(f"{name}-{manifest['version']}.wasm32.ura")
+        else:
+            output = Path(f"{name}{cfg['ext']}")
 
     # Build meta
     meta = build_meta(manifest, target)
 
     # Pack payload
     payload = pack_payload(files, meta)
+
+    if stub_wasm is not None:
+        stub_bytes = stub_wasm.read_bytes()
+        trailer = struct.pack("<Q", len(payload)) + URA_MAGIC
+        output.write_bytes(stub_bytes + payload + trailer)
+        output.chmod(0o755)
+        return output
 
     # Compile stub to a temp file
     ext = TARGETS[target]["ext"]
@@ -461,6 +485,10 @@ def main():
         "-o", "--output", type=Path,
         help="Output file path",
     )
+    parser.add_argument(
+        "--stub-wasm", type=Path,
+        help="wasm32 only: prebuilt service module used as the stub bytes",
+    )
 
     args = parser.parse_args()
     try:
@@ -469,6 +497,7 @@ def main():
             aps_archive=args.aps_archive,
             target=args.target,
             output=args.output,
+            stub_wasm=args.stub_wasm,
         )
         size = out.stat().st_size
         print(f"Built: {out}  ({size:,} bytes)")
